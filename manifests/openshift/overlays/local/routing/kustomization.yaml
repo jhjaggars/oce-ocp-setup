@@ -1,0 +1,7 @@
+# Local verification profile: the whole routing stage. GatewayClass needs
+# the Gateway API CRDs present on the cluster; on OpenShift the platform
+# supplies them, locally they are platform prep (see argocd/README.md).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../../base/routing
