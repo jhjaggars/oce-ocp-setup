@@ -110,21 +110,31 @@ versions exercised at the time of writing.
 
 **1. Platform prep.** Create the cluster and install Argo CD and the Gateway
 API CRDs (on OpenShift the platform supplies the Gateway API CRDs; locally
-they are prep, like the Ingress Operator provides them):
+they are prep, like the Ingress Operator provides them). Use server-side
+apply for Argo CD: the ApplicationSet CRD exceeds the client-side apply
+annotation limit on current Kubernetes. Exercised with Argo CD v3.6.1,
+Gateway API v1.7.0 and k3s v1.35.9:
 
 ```bash
 k3d cluster create oce-argocd
 
 kubectl create namespace argocd
 
-kubectl apply -n argocd -f \
-  https://raw.githubusercontent.com/argoproj/argo-cd/<pinned-tag>/manifests/install.yaml
+kubectl apply --server-side --force-conflicts -n argocd -f \
+  https://raw.githubusercontent.com/argoproj/argo-cd/v3.6.1/manifests/install.yaml
 
 kubectl -n argocd rollout status deploy/argocd-server --timeout=5m
 
 kubectl apply -f \
-  https://github.com/kubernetes-sigs/gateway-api/releases/download/<pinned-tag>/standard-install.yaml
+  https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.7.0/standard-install.yaml
 ```
+
+Host quirks seen during verification, in case they recur: a host whose root
+user exhausted the inotify instance limit (`fs.inotify.max_user_instances`)
+starves containerd's CRI watcher inside new k3d containers (`too many open
+files`), and docker's generated node DNS pointed at a resolver that was not
+listening, so kubelet image pulls failed until `/etc/resolv.conf` inside the
+node container was pointed at a working nameserver.
 
 **2. Serve the branch.** Argo must reach the repository from inside the k3d
 network, so serve a bare clone through `git daemon` on the host;
@@ -154,8 +164,12 @@ kubectl get applications -n argocd -w
 Expected progression: `oce-operators` (namespaces) becomes
 `Synced/Healthy`, then `oce-admission`, then `oce-openshell` (its
 `openclaw-system` NetworkPolicy is admitted only because the admission wave
-already created that namespace), then `oce-routing`, and finally `oce-root`
-reports `Synced/Healthy`.
+already created that namespace), then `oce-routing` (namespace and RBAC; the
+local overlay drops the GatewayClass, whose health waits for the Envoy
+controller the runbooks install), and finally `oce-root` reports
+`Synced/Healthy`. Prune is off by design: a resource removed from the
+repository stays in the cluster until it is deleted once by hand, and the
+Application reports `OutOfSync` until then.
 
 **4. Verify the resources and self-heal.**
 
@@ -167,7 +181,8 @@ kubectl get namespaces \
 kubectl -n openshell-system get networkpolicy
 kubectl get clusterrole oce-openshell-workspace-writer
 kubectl get runtimeclass openshell-sandbox
-kubectl get gatewayclass eg
+kubectl get role,rolebinding -n openclaw-system
+kubectl get role,rolebinding -n envoy-gateway-system
 
 # Delete one resource out of band; self-heal must restore it.
 kubectl -n openshell-system delete networkpolicy openshell-gateway-ingress
